@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter, defaultdict
 from typing import Any
@@ -204,25 +205,25 @@ def graph_to_html(graph: dict[str, Any]) -> str:
         category = node.get("category", "concept")
         size = node.get("size", 16)
 
-        node_jsons.append(f"""{{
-            id: "{node['id']}",
-            label: "{node.get('name', '-')}",
-            name: "{node.get('name', '-')}",
-            category: "{category}",
-            chapter: "{node.get('chapter', '-')}",
-            textbook: "{node.get('source_textbook', '-')}",
-            page: "{node.get('page', '-')}",
-            definition: "{node.get('definition', '-')}",
-            frequency: {freq},
-            sourceCount: {node.get('source_count', 1)},
-            size: {size},
-            color: "{rgba_color}",
-            fontColor: "#1e293b",
-            fontSize: 14,
-            borderWidth: 2,
-            borderColor: "{node.get('color', '#64748b')}",
-            title: "{node.get('name', '-')} ({node.get('source_textbook', '-')})"
-        }}""")
+        node_jsons.append({
+            "id": str(node["id"]),
+            "label": str(node.get("name", "-")),
+            "name": str(node.get("name", "-")),
+            "category": str(category),
+            "chapter": str(node.get("chapter", "-")),
+            "textbook": str(node.get("source_textbook", "-")),
+            "page": str(node.get("page", "-")),
+            "definition": str(node.get("definition", "-")),
+            "frequency": freq,
+            "sourceCount": node.get("source_count", 1),
+            "size": size,
+            "color": rgba_color,
+            "fontColor": "#1e293b",
+            "fontSize": 14,
+            "borderWidth": 2,
+            "borderColor": node.get("color", "#64748b"),
+            "title": f"{node.get('name', '-')} ({node.get('source_textbook', '-')})",
+        })
 
     # 边数据
     edge_jsons = []
@@ -235,22 +236,24 @@ def graph_to_html(graph: dict[str, Any]) -> str:
     }
     for edge in edges[:200]:
         rel_type = edge.get("relation_type", "related")
-        edge_jsons.append(f"""{{
-            from: "{edge.get('source', '')}",
-            to: "{edge.get('target', '')}",
-            relation: "{rel_type}",
-            label: "{RELATION_TYPE_LABELS.get(rel_type, rel_type)}",
-            color: {{ color: "{relation_colors.get(rel_type, '#94a3b8')}" }},
-            width: 1.5,
-            arrows: {{ to: {{ enabled: true, scaleFactor: 0.5 }} }},
-            title: "{edge.get('description', '')}"
-        }}""")
+        edge_jsons.append({
+            "from": str(edge.get("source", "")),
+            "to": str(edge.get("target", "")),
+            "relation": rel_type,
+            "label": RELATION_TYPE_LABELS.get(rel_type, rel_type),
+            "color": {"color": relation_colors.get(rel_type, "#94a3b8")},
+            "width": 1.5,
+            "arrows": {"to": {"enabled": True, "scaleFactor": 0.5}},
+            "title": str(edge.get("description", "")),
+        })
 
     # 教材图例
     legend_items = "".join(
         f'<div class="legend-item"><span class="legend-color" style="background:{color}"></span>{name}</div>'
         for name, color in textbook_colors.items()
     )
+    node_data = json.dumps(node_jsons[:80], ensure_ascii=False)
+    edge_data = json.dumps(edge_jsons[:150], ensure_ascii=False)
 
     return f"""
 <style>
@@ -441,7 +444,7 @@ def graph_to_html(graph: dict[str, Any]) -> str:
 
 <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
 <script>
-const nodes = new vis.DataSet([{id: "placeholder", label: "加载中…"}]);
+const nodes = new vis.DataSet([{{id: "placeholder", label: "加载中…"}}]);
 const edges = new vis.DataSet([]);
 
 const container = document.getElementById('mynetwork');
@@ -541,12 +544,12 @@ network.on('click', function(params) {{
 nodes.clear();
 edges.clear();
 
-const nodeData = [{id: "placeholder", label: "无数据"}];
+const nodeData = [{{id: "placeholder", label: "无数据"}}];
 const edgeData = [];
 
 try {{
-    nodes.add({node_jsons[:80]});
-    edges.add({edge_jsons[:150]});
+    nodes.add({node_data});
+    edges.add({edge_data});
 }} catch(e) {{
     console.error('Error loading graph:', e);
 }}

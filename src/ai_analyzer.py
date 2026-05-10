@@ -16,6 +16,7 @@ from src.api_usage import (
     classify_api_error,
     estimate_tokens,
     get_api_base_url,
+    load_api_events,
     record_api_event,
     sanitize_error_message,
 )
@@ -28,6 +29,8 @@ load_dotenv()
 CACHE_DIR = Path(".cache/ai")
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
+BLOCKING_ERRORS = {"quota_exhausted", "rate_limited", "timeout", "network_error"}
+
 
 def is_ai_configured() -> bool:
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
@@ -35,7 +38,8 @@ def is_ai_configured() -> bool:
 
 
 def get_model_name() -> str:
-    return os.getenv("LLM_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    default_model = "deepseek-ai/DeepSeek-V4-Pro"
+    return os.getenv("LLM_MODEL", default_model).strip() or default_model
 
 
 def get_model_options() -> list[str]:
@@ -107,10 +111,22 @@ def write_cached_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def should_skip_business_ai() -> bool:
+    """Skip heavy AI calls briefly after provider-side failures."""
+    events = load_api_events(limit=12)
+    for event in reversed(events):
+        if event.get("operation") == "quota_probe" and event.get("status") == "success":
+            return False
+        if event.get("error_type") in BLOCKING_ERRORS:
+            return get_bool_env("AI_SKIP_AFTER_PROVIDER_ERROR", True)
+    return False
+
+
 def extract_json(text: str) -> dict[str, Any]:
     """提取并解析 JSON，支持多种 AI 返回格式"""
     if not text or not text.strip():
         raise ValueError("Empty response")
+    text = text.strip()
     
     # 1. 去除 Markdown 代码块标记
     text = text.strip()
@@ -142,14 +158,12 @@ def extract_json(text: str) -> dict[str, Any]:
     
     # 5. 尝试修复常见问题
     text = text.strip()
-    # 处理单引号
     text = text.replace("'", '"')
-    # 处理尾部逗号
     text = re.sub(r',\s*([}\]])', r'\1', text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        raise ValueError(f"Failed to parse JSON: {text[:200]}...")
+        return {"_raw_text": text[:4000], "_parse_error": "json_decode_failed"}
 
 
 def collect_stream_text(messages: list[dict[str, str]]) -> str:
@@ -167,8 +181,8 @@ def collect_stream_text(messages: list[dict[str, str]]) -> str:
     stream = client.chat.completions.create(**kwargs)
     parts: list[str] = []
     for chunk in stream:
-        # 处理流式响应块
-        delta = getattr(getattr(chunk, "choices", [None])[0], "delta", None) if hasattr(chunk, "choices") else None
+        choices = getattr(chunk, "choices", None) or []
+        delta = getattr(choices[0], "delta", None) if choices else None
         if delta is None:
             continue
         content = getattr(delta, "content", None) or ""
@@ -183,6 +197,22 @@ def call_ai_json(system_prompt: str, user_prompt: str, cache_tag: str = "default
 
     input_chars = len(system_prompt) + len(user_prompt)
     started_at = time.perf_counter()
+    if cache_tag != "quota_probe" and should_skip_business_ai():
+        record_api_event({
+            "status": "skipped",
+            "operation": cache_tag,
+            "model": get_model_name(),
+            "base_url": get_api_base_url(),
+            "duration_ms": (time.perf_counter() - started_at) * 1000,
+            "input_chars": input_chars,
+            "output_chars": 0,
+            "estimated_input_tokens": estimate_tokens(input_chars),
+            "estimated_output_tokens": 0,
+            "error_type": "recent_provider_failure",
+            "error_message": "Skipped after a recent quota, rate limit, timeout, or network failure.",
+        })
+        raise RuntimeError("Recent provider failure; skipped business AI call.")
+
     path = cache_path(cache_tag, system_prompt, user_prompt)
     cached = read_cached_json(path)
     if cached is not None:
@@ -273,7 +303,7 @@ def probe_ai_status() -> dict[str, Any]:
         return {"ok": False, "message": "OPENAI_API_KEY 未配置。"}
 
     started_at = time.perf_counter()
-    messages = [{"role": "user", "content": "只回复 OK"}]
+    messages = [{"role": "user", "content": "OK"}]
     input_chars = len(messages[0]["content"])
     try:
         content = collect_stream_text(messages).strip()
@@ -342,17 +372,18 @@ def build_ai_knowledge_graph(book: dict[str, Any]) -> dict[str, Any]:
     source = [trim_chapter(chapter, char_limit) for chapter in select_representative_chapters(book)]
 
     prompt = f"""
-请为教材《{book.get('filename', '-')}》抽取知识图谱。
-只输出 JSON，格式为：
+为教材《{book.get('filename', '-')}》抽取小型知识图谱。
+只返回紧凑 JSON，不要解释，不要 Markdown。最多 8 个 nodes、10 条 edges。
+JSON 格式：
 {{
   "nodes": [
     {{
-      "id": "唯一英文或拼音id",
-      "name": "知识点名称",
+      "id": "n1",
+      "name": "知识点",
       "category": "章节/核心概念/一般概念",
       "chapter": "来源章节",
       "page": "页码",
-      "definition": "一句话定义",
+      "definition": "短定义",
       "source_textbook": "{book.get('filename', '-')}",
       "size": 14
     }}
@@ -366,8 +397,8 @@ def build_ai_knowledge_graph(book: dict[str, Any]) -> dict[str, Any]:
     }}
   ]
 }}
-要求：关系至少包含前置依赖、并列关系、包含关系、应用关系中的两类；节点数量控制在 25 个以内。
-章节内容如下：
+关系类型限于 prerequisite/contains/parallel/application/related。
+教材片段：
 {json.dumps(source, ensure_ascii=False)}
 """
 
@@ -403,8 +434,9 @@ def build_ai_integration_plan(
     feedback_items = feedback_items or []
 
     prompt = f"""
-请比较多本教材，识别知识点的重叠、互补和缺失，并给出整合决策。
-只输出 JSON，格式为：
+比较教材片段，输出跨教材整合决策。
+只返回紧凑 JSON，不要解释，不要 Markdown。最多 12 条 decisions。
+JSON 格式：
 {{
   "decisions": [
     {{
@@ -417,11 +449,11 @@ def build_ai_integration_plan(
     }}
   ]
 }}
-目标：整合成不超过原始内容 30% 的精华版，同时不能破坏前置依赖和关键应用案例。
-教师反馈如下：
+目标：保留核心概念和前置依赖，压缩到 30% 精华版。
+教师反馈：
 {json.dumps(feedback_items, ensure_ascii=False)}
 
-教材摘要如下：
+教材片段：
 {json.dumps(summaries, ensure_ascii=False)}
 """
     try:
@@ -447,13 +479,12 @@ def answer_question_with_ai(textbooks: list[dict[str, Any]], question: str) -> d
     )
 
     prompt = f"""
-基于以下教材片段回答问题。必须给出简明答案，并列出引用编号。
+基于教材片段回答问题。只返回紧凑 JSON，不要 Markdown。
 问题：{question}
 
 教材片段：
 {context}
 
-只输出 JSON：
 {{
   "answer": "回答正文",
   "citations": ["1", "2"]
@@ -468,6 +499,11 @@ def answer_question_with_ai(textbooks: list[dict[str, Any]], question: str) -> d
         if data.get("answer"):
             return {
                 "answer": data["answer"],
+                "citations": local_answer.get("citations", []),
+            }
+        if data.get("_raw_text"):
+            return {
+                "answer": data["_raw_text"],
                 "citations": local_answer.get("citations", []),
             }
     except Exception:
