@@ -1,0 +1,19 @@
+# EduMerge Agent - Docker Compose 配置
+version: '3.8'
+
+services:
+  edumerge:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api-inference.modelscope.cn/v1}
+      - LLM_MODEL=${LLM_MODEL:-deepseek-ai/DeepSeek-V4-Pro}
+      - AI_PROVIDER=${AI_PROVIDER:-ModelScope}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./.cache:/app/.cache
+      - ./report:/app/report
+    restart: unless-stopped
