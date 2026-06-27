@@ -18,7 +18,7 @@ def estimate_tokens(text_or_chars: str | int) -> int:
 
 
 def get_api_base_url() -> str:
-    return os.getenv("OPENAI_BASE_URL", "").strip() or "https://api.openai.com/v1"
+    return os.getenv("OPENAI_BASE_URL", "").strip() or "https://api-inference.modelscope.cn/v1"
 
 
 def classify_api_error(exc: Exception | str) -> str:
@@ -80,6 +80,7 @@ def summarize_api_usage(events: list[dict[str, Any]]) -> dict[str, Any]:
     success = [event for event in events if event.get("status") == "success"]
     failures = [event for event in events if event.get("status") == "failure"]
     cache_hits = [event for event in events if event.get("status") == "cache_hit"]
+    skipped = [event for event in events if event.get("status") == "skipped"]
     quota_errors = [event for event in failures if event.get("error_type") == "quota_exhausted"]
     rate_limits = [event for event in failures if event.get("error_type") == "rate_limited"]
 
@@ -92,6 +93,8 @@ def summarize_api_usage(events: list[dict[str, Any]]) -> dict[str, Any]:
         health = "额度不足"
     elif rate_limits:
         health = "限流中"
+    elif skipped and not success:
+        health = "已熔断"
     elif failures and not success:
         health = "异常"
     elif success or cache_hits:
@@ -105,6 +108,7 @@ def summarize_api_usage(events: list[dict[str, Any]]) -> dict[str, Any]:
         "success_calls": len(success),
         "failure_calls": len(failures),
         "cache_hits": len(cache_hits),
+        "skipped_calls": len(skipped),
         "quota_errors": len(quota_errors),
         "rate_limits": len(rate_limits),
         "estimated_tokens": total_input_tokens + total_output_tokens,

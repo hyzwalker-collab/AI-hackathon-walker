@@ -14,6 +14,8 @@ EduMerge Agent - 学科知识整合智能体
 
 from __future__ import annotations
 
+import os
+
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -617,8 +619,9 @@ with tab_api:
     b1, b2, b3, b4 = st.columns(4)
     b1.metric("额度错误", latest_summary["quota_errors"])
     b2.metric("限流错误", latest_summary["rate_limits"])
-    b3.metric("估算 Token", f"{latest_summary['estimated_tokens']:,}")
-    b4.metric("实际 Token", f"{latest_summary['actual_tokens']:,}" if latest_summary["actual_tokens"] else "未返回")
+    b3.metric("熔断跳过", latest_summary["skipped_calls"])
+    actual_tokens = f"{latest_summary['actual_tokens']:,}" if latest_summary["actual_tokens"] else "未返回"
+    b4.metric("Token 估算 / 实际", f"{latest_summary['estimated_tokens']:,} / {actual_tokens}")
 
     st.markdown("### 当前配置")
     config_rows = pd.DataFrame([
@@ -626,6 +629,7 @@ with tab_api:
         {"项目": "提供方", "值": "ModelScope"},
         {"项目": "模型", "值": get_model_name()},
         {"项目": "可选模型", "值": "；".join(get_model_options())},
+        {"项目": "失败后熔断", "值": os.getenv("AI_SKIP_AFTER_PROVIDER_ERROR", "true")},
         {"项目": "状态判定", "值": latest_summary["health"]},
         {"项目": "最后调用时间", "值": latest_summary["last_ts"]},
         {"项目": "最后状态", "值": latest_summary["last_status"]},

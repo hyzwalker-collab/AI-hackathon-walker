@@ -63,7 +63,8 @@ cp .env.example .env
 OPENAI_API_KEY=your_api_key_here
 OPENAI_BASE_URL=https://api-inference.modelscope.cn/v1
 LLM_MODEL=deepseek-ai/DeepSeek-V4-Pro
-AI_PROVIDER=ModelScope
+LLM_MODEL_OPTIONS=deepseek-ai/DeepSeek-V4-Pro,MiniMax/MiniMax-M2.7:MiniMax
+AI_SKIP_AFTER_PROVIDER_ERROR=true
 ```
 
 ### 3. 启动应用
